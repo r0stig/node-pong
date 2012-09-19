@@ -2,7 +2,7 @@
 
 // Checks if some player has won, returns -1 for no win
 // or the slot id for the player that is the winner
-function checkVictory(ball) {
+/*function checkVictory(ball) {
 	// Someone lost?
 	if (ball.getX() < 0) {
 		return 0;
@@ -19,9 +19,8 @@ function moveBall(ball, padL, padR) {
 	if ( isColliding(padL, ball) || isColliding(padR, ball)) {
 		ball.setVelX( -ball.getVelX() );
 	}
-
-
 }
+*/
 
 function isColliding(objA, objB) {
 	var leftA = objA.getX()
@@ -50,5 +49,6 @@ function isColliding(objA, objB) {
 	return true;
 }
 
-exports.checkVictory = checkVictory;
-exports.moveBall = moveBall;
+//exports.checkVictory = checkVictory;
+//exports.moveBall = moveBall;
+exports.isColliding = isColliding;

@@ -4,6 +4,7 @@ var socketio = require('socket.io');
 var gameObj = require('./static/shared/game_objects');
 var slots = require('./slots');
 var logic = require('./game_logic');
+var gamePlayer = require('./player');
 
 
 var app = express();
@@ -44,106 +45,140 @@ server.listen(3000, function() {
 });
 
 
+function Game() {
+	this.ball = new gameObj.Ball(null, 100, 50, -5, 6, 20, 20, 700, 500);
+	this.players = [];
+	this.running = false;
+	this.MAX_PLAYERS = 2;
+	this.SPEED_UP_FACTOR = 1.2;
 
+	setInterval(this.loop.bind(this), 100);
 
-var ball = new gameObj.Ball(null, 100, 50, -5, 6, 20, 20, 700, 500);
-var padL = new gameObj.Paddle(null, 650, 50, 10, 50);
-var padR = new gameObj.Paddle(null, 50, 50, 10, 50);
-var padLId;
-var padRId;
-var running = false;
+	// Find first open slot, returns -1 if no open slot
+	// available
+	this.findOpenSlot = function() {
+		// TODO: Use function-global for paddles
+		// (so it will be easy to extend with more paddles)
+		var paddles = [0, 1];
+		// Find free paddle
+		for(var i = 0; i < this.players.length; ++i) {
+			var index = paddles.indexOf(this.players[i].getPaddleID());
+			if (index != -1) {
+				paddles.splice(index, 1);
+			}
+		}
+		return (paddles.length > 0 ? paddles[0] : -1);
 
-function loop() {
-	if (! running) {
-		return;
-	}
-	logic.moveBall(ball, padL, padR);
-	var v = logic.checkVictory(ball);
-
-	if ( v == 0) {
-		var slot = slots.slotGetByPaddle(1);
-		slot.addScore();
-		sendScore();
-		resetBall();
-	} else if (v == 1 ) {
-		var slot = slots.slotGetByPaddle(0);
-		slot.addScore();
-		sendScore();
-		resetBall();
-	} else {
-		sio.sockets.emit('ballmovement', ball);
 	}
 }
-setInterval(loop, 100);
+// Connect player, find free slot
+// Send message to player with paddle
+// Bind all socket events to functions
+Game.prototype.playerConnected = function(socket) {
+	var paddle = this.findOpenSlot();
+	if (paddle == -1) {
+		console.log('paddle == -1');
+		return;
+	}
+	var player = new gamePlayer.Player(socket, paddle);
+	this.players.push(player);
 
-
-sio.sockets.on('connection', function(socket) {
-	//console.log('connection');
-
-	var mySlot = slots.slotInsert(socket.id);
-	socket.emit('assignedPaddle', {paddle: mySlot.getPaddle()});
+	socket.emit('assignedPaddle', {paddle: paddle});
 
 	// 2 players? Run the game!
-	if (slots.slotCount() == 2) {
-		start();
+	if (this.players.length == this.MAX_PLAYERS) {
+		this.start();
 	} else {
-		pause();
+		this.pause();
 	}
 	
 	// Each player sends their paddle movement to server
 	// Check for some sort of speed hack should be implemented here
-	socket.on('paddlemovement', function(data) {
-		if (mySlot.paddle == 0) {
-			padL.setX(data.x);
-			padL.setY(data.y);
-			//console.log('paddlemovement for left', data);
-			socket.broadcast.emit('opponentmovement', {paddle: 0, 
-				x: padL.getX(),
-				y: padL.getY()});
-		} else if (mySlot.paddle == 1) {
-			padR.setX(data.x);
-			padR.setY(data.y);
-			//console.log('paddlemovement for right', data);
-			socket.broadcast.emit('opponentmovement', {paddle: 1, 
-				x: padR.getX(),
-				y: padR.getY()});
-		}
-	});
+	socket.on('paddlemovement', player.onPaddleMovement.bind(player));
+
 
 	// When a player disconnects the game is paused
 	// Next player joining will use the disconnected players
 	// place
-	socket.on('disconnect', function() {
-		//console.log('client disconnected');
-		
-		slots.slotRemove(socket.id);
-		pause();
-	});
-
-
-});
-
-function resetBall() {
-	ball.setX(350);
-	ball.setY(250);
-	ball.setVelX(Math.random()*10);
-	ball.setVelY(Math.random()*10);
-
+	socket.on('disconnect', (function() {
+		this.playerDisconnected(socket)
+	}).bind(this));
 }
 
-function pause() {
-	running = false;
-	sio.sockets.emit('statusUpdate', {running: false});
+// Free slot, pause game
+Game.prototype.playerDisconnected = function(socket) {
+	//console.log(this);
+	console.log('playerDisconnected');
+	var index = -1;
+	for (var i = 0; i < this.players.length; ++i) {
+		if (this.players[i].socket.id == socket.id) {
+			index = i;
+			break;
+		}
+	}
+	this.players.splice(index, 1);
+	this.pause();
+	//slots.slotRemove(socket.id);
+	//pause();
 }
-
-function start() {
-	running = true;
+// Reset the ball to the center position
+Game.prototype.resetBall = function() {
+	this.ball.setX(350);
+	this.ball.setY(250);
+	this.ball.setVelX(Math.random()*10);
+	this.ball.setVelY(Math.random()*10);
+}
+// Start game
+Game.prototype.start = function() {
+	this.running = true;
 	sio.sockets.emit('statusUpdate', {running: true});
 }
+// Pause game
+Game.prototype.pause = function() {
+	this.running = false;
+	sio.sockets.emit('statusUpdate', {running: false});
+}
+Game.prototype.loop = function() {
+	if (! this.running) {
+		return;
+	}
+	this.moveBall();
+	var v = this.checkVictory();
 
-function sendScore() {
-	var score = slots.slotGetAllScores();
+	if ( v != -1 ) {
+		var player = this.players[v];
+		player.addScore();
+		this.sendScore();
+		this.resetBall();
+	} else {
+		sio.sockets.emit('ballmovement', this.ball);
+	}
+}
+Game.prototype.moveBall = function() {
+	this.ball.move( this.ball.getVelX(), this.ball.getVelY());
+	//console.log('ball move:', ball, ball.getX(), ball.getY());
+	if ( logic.isColliding(this.players[0].getPaddle(), this.ball) || logic.isColliding(this.players[1].getPaddle(), this.ball)) {
+		this.ball.setVelX( -(this.ball.getVelX()*this.SPEED_UP_FACTOR) );
+	}
+}
+Game.prototype.checkVictory = function() {
+	// Someone lost?
+	if (this.ball.getX() < 0) {
+		return 0;
+	} else if (this.ball.getX() > 700) {
+		return 1;
+	} else {
+		return -1;
+	}
+}
+Game.prototype.sendScore = function() {
+	var score = [];
+	for (var i = 0; i < this.players.length; ++i) {
+		score.push(this.players[i].getScore());
+	}
+
 	sio.sockets.emit('scoreUpdate', score);
 }
 
-
+var game = new Game();
+sio.sockets.on('connection', game.playerConnected.bind(game));

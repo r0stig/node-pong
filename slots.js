@@ -1,4 +1,4 @@
-
+/*
 var slots = [];
 
 function Slot(socketid, paddle) {
@@ -90,3 +90,4 @@ exports.slotGet = slotGet;
 exports.slotGetByPaddle = slotGetByPaddle;
 exports.slotGetAllScores = slotGetAllScores;
 exports.slotCount = slotCount;
+*/
